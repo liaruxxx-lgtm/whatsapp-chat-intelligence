@@ -1,0 +1,38 @@
+services:
+  worker:
+    build: .
+    command: ["node", "dist/index.js", "worker"]
+    environment:
+      WCI_DATA_DIR: /data
+      WCI_TIMEZONE: Europe/Berlin
+      WCI_LOCALE: de
+      WCI_LIVE_IMPORT_ENABLED: "false"
+      WCI_EXTERNAL_TRANSCRIPTION_ENABLED: "false"
+      WCI_KILL_SWITCH: "false"
+      WCI_ENCRYPTION_KEY_BASE64: ${WCI_ENCRYPTION_KEY_BASE64:?Set a local 32-byte base64 key before starting Docker}
+    volumes:
+      - wci_data:/data
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: ["node", "dist/index.js", "dashboard"]
+    environment:
+      WCI_DATA_DIR: /data
+      WCI_TIMEZONE: Europe/Berlin
+      WCI_LOCALE: de
+      WCI_LIVE_IMPORT_ENABLED: "false"
+      WCI_EXTERNAL_TRANSCRIPTION_ENABLED: "false"
+      WCI_KILL_SWITCH: "false"
+      WCI_OPENAI_SUMMARIES_ENABLED: ${WCI_OPENAI_SUMMARIES_ENABLED:-false}
+      WCI_OPENAI_API_KEY: ${WCI_OPENAI_API_KEY:-}
+      WCI_OPENAI_SUMMARY_MODEL: ${WCI_OPENAI_SUMMARY_MODEL:-gpt-6-astra}
+      WCI_ENCRYPTION_KEY_BASE64: ${WCI_ENCRYPTION_KEY_BASE64:?Set a local 32-byte base64 key before starting Docker}
+    volumes:
+      - wci_data:/data
+    ports:
+      - "127.0.0.1:8787:8787"
+    profiles: ["dashboard"]
+
+volumes:
+  wci_data:

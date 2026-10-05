@@ -1,0 +1,161 @@
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js b/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
+index f2003ac..6294b9b 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
+@@ -359,7 +359,7 @@ export const makeMessagesRecvSocket = (config) => {
+         }
+     };
+     const sendMessageAck = async (node, errorCode) => {
+-        const stanza = buildAckStanza(node, errorCode, authState.creds.me.id);
++        const stanza = buildAckStanza(node, errorCode, authState.creds.me?.id);
+         logger.debug({ recv: { tag: node.tag, attrs: node.attrs }, sent: stanza.attrs }, 'sent ack');
+         await sendNode(stanza);
+     };
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Socket/socket.js b/node_modules/@whiskeysockets/baileys/lib/Socket/socket.js
+index ae34a8f..0b490de 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Socket/socket.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Socket/socket.js
+@@ -6,7 +6,7 @@ import { proto } from '../../WAProto/index.js';
+ import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT, NOISE_WA_HEADER, PROCESSABLE_HISTORY_TYPES, TimeMs, UPLOAD_TIMEOUT } from '../Defaults/index.js';
+ import { QueryIds, ReachoutTimelockEnforcementType } from '../Types/index.js';
+ import { DisconnectReason, XWAPaths } from '../Types/index.js';
+-import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, buildPairingQRData, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getCompanionPlatformId, getErrorCodeFromStreamError, getNextPreKeysNode, makeEventBuffer, makeNoiseHandler, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
++import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, buildPairingQRData, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getCompanionPlatformId, getErrorCodeFromStreamError, getNextPreKeysNode, handleCompanionRegRefresh, makeEventBuffer, makeNoiseHandler, makePairingQRRenderer, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
+ import { assertNodeErrorFree, binaryNodeToString, encodeBinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, isLidUser, jidDecode, jidEncode, S_WHATSAPP_NET } from '../WABinary/index.js';
+ import { BinaryInfo } from '../WAM/BinaryInfo.js';
+ import { USyncQuery, USyncUser } from '../WAUSync/index.js';
+@@ -691,6 +691,7 @@ export const makeSocket = (config) => {
+     // the server terminated the connection
+     ws.on('CB:xmlstreamend', () => void end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed })));
+     // QR gen
++    let refreshPairingQR;
+     ws.on('CB:iq,type:set,pair-device', async (stanza) => {
+         const iq = {
+             tag: 'iq',
+@@ -705,25 +706,34 @@ export const makeSocket = (config) => {
+         const refNodes = getBinaryNodeChildren(pairDeviceNode, 'ref');
+         const noiseKeyB64 = Buffer.from(creds.noiseKey.public).toString('base64');
+         const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64');
+-        const advB64 = creds.advSecretKey;
++        const renderer = makePairingQRRenderer(refNodes.map(refNode => refNode.content.toString('utf-8')), ref => {
++            ev.emit('connection.update', {
++                qr: buildPairingQRData(ref, noiseKeyB64, identityKeyB64, creds.advSecretKey, browser)
++            });
++        });
++        refreshPairingQR = () => void renderer.refresh();
+         let qrMs = qrTimeout || 60000; // time to let a QR live
+         const genPairQR = () => {
+             if (!ws.isOpen) {
+                 return;
+             }
+-            const refNode = refNodes.shift();
+-            if (!refNode) {
++            if (!renderer.next()) {
+                 void end(new Boom('QR refs attempts ended', { statusCode: DisconnectReason.timedOut }));
+                 return;
+             }
+-            const ref = refNode.content.toString('utf-8');
+-            const qr = buildPairingQRData(ref, noiseKeyB64, identityKeyB64, advB64, browser);
+-            ev.emit('connection.update', { qr });
+             qrTimer = setTimeout(genPairQR, qrMs);
+             qrMs = qrTimeout || 20000; // shorter subsequent qrs
+         };
+         genPairQR();
+     });
++    ws.on('CB:notification,type:companion_reg_refresh', (node) => {
++        handleCompanionRegRefresh(node, {
++            creds,
++            emitCredsUpdate: update => ev.emit('creds.update', update),
++            refreshQR: () => refreshPairingQR?.(),
++            logger
++        });
++    });
+     // device paired for the first time
+     // if device pairs successfully, the server asks to restart the connection
+     ws.on('CB:iq,,pair-success', async (stanza) => {
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.d.ts b/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.d.ts
+index a79a52c..00302cc 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.d.ts
++++ b/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.d.ts
+@@ -1,4 +1,6 @@
+-import type { WABrowserDescription } from '../Types/index.js';
++import type { AuthenticationCreds, WABrowserDescription } from '../Types/index.js';
++import type { BinaryNode } from '../WABinary/index.js';
++import type { ILogger } from './logger.js';
+ export declare enum CompanionWebClientType {
+     UNKNOWN = 0,
+     CHROME = 1,
+@@ -14,4 +16,17 @@ export declare enum CompanionWebClientType {
+ export declare const getCompanionWebClientType: ([os, browserName]: WABrowserDescription) => CompanionWebClientType;
+ export declare const getCompanionPlatformId: (browser: WABrowserDescription) => string;
+ export declare const buildPairingQRData: (ref: string, noiseKeyB64: string, identityKeyB64: string, advB64: string, browser: WABrowserDescription) => string;
++export type PairingQRRenderer = {
++    next(): boolean;
++    refresh(): boolean;
++};
++export declare const makePairingQRRenderer: (refs: string[], render: (ref: string) => void) => PairingQRRenderer;
++export type CompanionRegRefreshContext = {
++    creds: AuthenticationCreds;
++    emitCredsUpdate: (update: Partial<AuthenticationCreds>) => void;
++    refreshQR: () => void;
++    logger: ILogger;
++};
++export type CompanionRegRefreshOutcome = 'rotated' | 'ignored_malformed' | 'ignored_registered';
++export declare const handleCompanionRegRefresh: (node: BinaryNode, context: CompanionRegRefreshContext) => CompanionRegRefreshOutcome;
+ //# sourceMappingURL=companion-reg-client-utils.d.ts.map
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.js b/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.js
+index f5edebd..28ad06d 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Utils/companion-reg-client-utils.js
+@@ -1,3 +1,6 @@
++import { randomBytes } from 'crypto';
++import { getBinaryNodeChild } from '../WABinary/index.js';
++
+ export var CompanionWebClientType;
+ (function (CompanionWebClientType) {
+     CompanionWebClientType[CompanionWebClientType["UNKNOWN"] = 0] = "UNKNOWN";
+@@ -32,4 +35,44 @@ export const buildPairingQRData = (ref, noiseKeyB64, identityKeyB64, advB64, bro
+     return ('https://wa.me/settings/linked_devices#' +
+         [ref, noiseKeyB64, identityKeyB64, advB64, getCompanionPlatformId(browser)].join(','));
+ };
++export const makePairingQRRenderer = (refs, render) => {
++    let index = 0;
++    let current;
++    return {
++        next() {
++            const ref = refs[index];
++            if (ref === undefined) {
++                return false;
++            }
++            index += 1;
++            current = ref;
++            render(ref);
++            return true;
++        },
++        refresh() {
++            if (current === undefined) {
++                return false;
++            }
++            render(current);
++            return true;
++        }
++    };
++};
++const COMPANION_REG_REFRESH_CHILDREN = ['companion_reg_refresh', 'pair-device-rotate-qr'];
++export const handleCompanionRegRefresh = (node, { creds, emitCredsUpdate, refreshQR, logger }) => {
++    if (!COMPANION_REG_REFRESH_CHILDREN.some(tag => getBinaryNodeChild(node, tag))) {
++        // Do not log the raw protocol node; it may contain pairing material.
++        logger.warn({}, 'companion_reg_refresh is missing an expected child; ignoring');
++        return 'ignored_malformed';
++    }
++    if (creds.me) {
++        logger.debug({}, 'companion_reg_refresh on a registered session; keeping the advertisement secret');
++        return 'ignored_registered';
++    }
++    creds.advSecretKey = randomBytes(32).toString('base64');
++    emitCredsUpdate({ advSecretKey: creds.advSecretKey });
++    logger.info({}, 'rotated the pending advertisement secret and refreshed the pairing QR');
++    refreshQR();
++    return 'rotated';
++};
+ //# sourceMappingURL=companion-reg-client-utils.js.map

@@ -1,0 +1,38 @@
+{
+  "name": "whatsapp-chat-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Privacy-first local WhatsApp chat intelligence with an allowlist-only synthetic-first pipeline.",
+  "engines": {
+    "node": ">=26.0.0",
+    "npm": ">=11.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests=false",
+    "test:watch": "vitest",
+    "postinstall": "node scripts/apply-baileys-pairing-patch.js",
+    "worker": "node --env-file-if-exists=.env --import tsx src/index.ts worker",
+    "dashboard": "node --env-file-if-exists=.env --import tsx src/index.ts dashboard",
+    "setup:personal": "node --env-file-if-exists=.env --import tsx src/index.ts personal-setup",
+    "setup:launch-agent": "node --env-file-if-exists=.env --import tsx src/index.ts install-launch-agent",
+    "import:chat-export": "node --env-file-if-exists=.env --import tsx src/index.ts import-chat-export",
+    "export:local": "node --env-file-if-exists=.env --import tsx src/index.ts export-local",
+    "erase:local": "node --env-file-if-exists=.env --import tsx src/index.ts erase-local",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@js-temporal/polyfill": "0.5.1",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "@types/qrcode": "1.5.6",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}
